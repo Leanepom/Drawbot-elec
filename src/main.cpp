@@ -13,7 +13,7 @@ BluetoothSerial SerialBT;
 #define IN_2_G 16
 
 // Fonctions de mouvement
-void avancer() {
+void tournerDroite() {
   digitalWrite(IN_1_D, HIGH);
   digitalWrite(IN_2_D, LOW);
   digitalWrite(IN_1_G, HIGH);
@@ -34,7 +34,7 @@ void tournerGauche() {
   digitalWrite(IN_2_G, HIGH);
 }
 
-void tournerDroite() {
+void avancer() {
   digitalWrite(IN_1_D, LOW);
   digitalWrite(IN_2_D, HIGH);
   digitalWrite(IN_1_G, HIGH);
@@ -78,7 +78,7 @@ void loop() {
 
     switch (cmd) {
       case '1': // Tourner à droite
-        avancer();
+        tournerDroite();
         SerialBT.println("Tourner à droite");
         break;
       case '2': // Tourner à gauche
@@ -90,7 +90,7 @@ void loop() {
         SerialBT.println("Reculer");
         break;
       case '4': // Avancer
-        tournerDroite();
+        avancer();
         SerialBT.println("Avancer");
         break;
       case '0': // Stop
@@ -103,4 +103,3 @@ void loop() {
     }
   }
 }
-
