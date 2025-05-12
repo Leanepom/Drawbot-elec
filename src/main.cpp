@@ -48,6 +48,81 @@ void stopMotors() {
   digitalWrite(IN_2_G, LOW);
 }
 
+// Fonction pour dessiner la flèche
+void sequenceFleche() {
+  // À ajuster expérimentalement selon la vitesse des moteurs
+  int avance_12v5cm = 312.5;  // Durée en ms pour 12.5 cm
+  int recule_12v5cm = 312.5;  // Durée pour 12.5 cm
+  int tourne_gauche_45 = 100; // Durée pour 45° de rotation
+  int tourne_droite_90 = 200; // Durée pour 90° de rotation
+  int avance_20cm = 500;  // Durée pour 20 cm
+
+  // Avancer de 12.5 cm
+  avancer();
+  delay(avance_12v5cm);
+  stopMotors();
+  delay(500);
+  SerialBT.println("Il a avancé de 10cm.");
+
+  // Tourner 45° à gauche
+  tournerGauche();
+  delay(tourne_gauche_45);
+  stopMotors();
+  delay(500);
+  SerialBT.println("Il a tourné à gauche.");
+
+  // Reculer de 12.5 cm
+  reculer();
+  delay(recule_12v5cm);
+  stopMotors();
+  delay(500);
+  SerialBT.println("Il a reculé de 10cm.");
+  
+  // Avancer de 12.5 cm
+  avancer();
+  delay(avance_12v5cm);
+  stopMotors();
+  delay(500);
+  SerialBT.println("Il a avancé de 10cm.");
+
+  // Tourner 90° à droite
+  tournerDroite();
+  delay(tourne_droite_90);
+  stopMotors();
+  delay(500);
+  SerialBT.println("Il a tourné à droite.");
+
+  // Reculer de 12.5 cm
+  reculer();
+  delay(recule_12v5cm);
+  stopMotors();
+  delay(500);
+  SerialBT.println("Il a reculé de 10cm.");
+  
+  // Avancer de 12.5 cm
+  avancer();
+  delay(avance_12v5cm);
+  stopMotors();
+  delay(500);
+  SerialBT.println("Il a avancé de 10cm.");
+
+  // Tourner 45° à gauche
+  tournerGauche();
+  delay(tourne_gauche_45);
+  stopMotors();
+  delay(500);
+  SerialBT.println("Il a tourné à gauche.");
+
+  // Avancer de 20 cm
+  avancer();
+  delay(avance_20cm);
+  stopMotors();
+  delay(500);
+  SerialBT.println("Il a avancé de 20 cm.");
+
+  SerialBT.println("Séquence flèche terminée !");
+}
+
 // Fonction pour exécuter l’escalier
 void sequenceEscalier() {
   // À ajuster expérimentalement selon la vitesse des moteurs
@@ -136,9 +211,13 @@ void loop() {
         avancer();
         SerialBT.println("Avancer");
         break;
-      case '5': // Séquence escalier
-        SerialBT.println("Début séquence escalier...");
-        sequenceEscalier();
+        case '5': // Séquence escalier
+          SerialBT.println("Début séquence escalier...");
+          sequenceEscalier();
+          break;
+      case '6': // Séquence flèche
+        SerialBT.println("Début séquence flèche...");
+        sequenceFleche();
         break;
       case '0': 
         stopMotors();
