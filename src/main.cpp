@@ -246,15 +246,13 @@ void cercle(float rayonStylo) {
 
   SerialBT.println("Début cercle (par angle)...");
 
-  while (true) {
-    // Angle tourné = différence de distance entre les roues divisé par empattement
-    float angle_actuel = (abs(ticks_droit - ticks_gauche) * distance_par_tick) / EMPATTEMENT_CM;
+  long ticks_target = distanceToTicks(2 * PI * rayonExterieur);
 
-    if (angle_actuel >= angle_vise_rad) break;
-
+  while (ticks_droit < ticks_target) {
     setMotorPWM(pwm_gauche, pwm_droit);
     delay(10);
   }
+
 
   stopMotors();
   SerialBT.println("Cercle terminé !");
@@ -309,9 +307,23 @@ void loop() {
     sequenceEscargot(longueurInitiale, nbTours);
     break;
     }
-    case 'c':
-      cercle(18.0);
-      break; 
+    
+    case 'c': {
+      SerialBT.println("Saisir le rayon du cercle (cm) :");
+      while (!SerialBT.available()); 
+
+      String input = SerialBT.readStringUntil('\n'); 
+      float rayon = input.toFloat();
+
+      if (rayon < 2 || rayon > 20) {
+        SerialBT.println("Le rayon doit être compris entre 2 et 20 cm.");
+      } else {
+        SerialBT.print("Rayon reçu : ");
+        SerialBT.println(rayon);
+        cercle(rayon);
+      }
+      break;
+    }
     case 'd': 
       //sequenceRosace(); 
       break;
