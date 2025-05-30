@@ -1,7 +1,12 @@
 #include "BluetoothSerial.h"
+#include <Wire.h>
+//#include <Adafruit_LIS3MDL.h>
+//#include <Adafruit_Sensor.h>
+#include <math.h>
+
 BluetoothSerial SerialBT;
 
-// Broches moteurs
+// Moteur - ESP32
 #define EN_D 23
 #define EN_G 4
 #define IN_1_D 19
@@ -9,253 +14,168 @@ BluetoothSerial SerialBT;
 #define IN_1_G 17
 #define IN_2_G 16
 
-// Broches encodeurs
+// Encodeurs
 #define ENC_D_A 27
 #define ENC_G_A 32
 
-// Variables encodeurs
-volatile long ticks_droit = 0;
-volatile long ticks_gauche = 0;
+// Paramètres physiques
+const float DIAMETRE_ROUE_CM = 9.0;
+const float EMPATTEMENT_CM = 8.9;
+const float TICKS_PAR_TOUR = 830.0;
+const float PERIMETRE_ROUE = PI * DIAMETRE_ROUE_CM;
 
-// Paramètres physiques calibrés
-const float TICKS_PAR_TOUR = 830.0;   // Calibré à partir des mesures réelles
-const float DIAMETRE_ROUE_CM = 9.0;   // 90 mm
-const float EMPATTEMENT_CM = 13.0;    // Ajusté
-
-// PID pour correction de trajectoire
-float Kp = 1.0;
-float Ki = 0.0;
-float Kd = 0.0;
+// PID pour les distances
+float Kp = 4.0, Ki = 0.05, Kd = 0.1;
 float previous_error = 0;
 float integral = 0;
 
-// PWM par défaut
+// PWM
 int pwm_normal = 120;
-int pwm_lent = 100;
 
-// Fonctions moteurs
+// Position
+float posX = 0.0, posY = 0.0, angleRobot = 0.0;
+
+// Correction distance
+const float facteur_echelle = 0.035;  // Ajusté depuis 23.5 → allonge un peu la distance
+
+// Encodeurs
+volatile long ticks_droit = 0;
+volatile long ticks_gauche = 0;
+
+void IRAM_ATTR onTickDroit() { ticks_droit++; }
+void IRAM_ATTR onTickGauche() { ticks_gauche++; }
+
+void setupPWM() {
+  ledcSetup(0, 1000, 8);
+  ledcSetup(1, 1000, 8);
+  ledcSetup(2, 1000, 8);
+  ledcSetup(3, 1000, 8);
+  ledcAttachPin(IN_1_D, 0);
+  ledcAttachPin(IN_2_D, 1);
+  ledcAttachPin(IN_1_G, 2);
+  ledcAttachPin(IN_2_G, 3);
+}
+
 void setMotorPWM(int pwm_gauche, int pwm_droit) {
   pwm_gauche = constrain(pwm_gauche, -255, 255);
   pwm_droit = constrain(pwm_droit, -255, 255);
-
   if (pwm_gauche >= 0) {
-    analogWrite(IN_1_G, pwm_gauche);
-    analogWrite(IN_2_G, 0);
+    ledcWrite(2, pwm_gauche);
+    ledcWrite(3, 0);
   } else {
-    analogWrite(IN_1_G, 0);
-    analogWrite(IN_2_G, -pwm_gauche);
+    ledcWrite(2, 0);
+    ledcWrite(3, -pwm_gauche);
   }
-
   if (pwm_droit >= 0) {
-    analogWrite(IN_1_D, 0);
-    analogWrite(IN_2_D, pwm_droit);
+    ledcWrite(0, 0);
+    ledcWrite(1, pwm_droit);
   } else {
-    analogWrite(IN_1_D, -pwm_droit);
-    analogWrite(IN_2_D, 0);
+    ledcWrite(0, -pwm_droit);
+    ledcWrite(1, 0);
   }
 }
 
 void stopMotors() {
   setMotorPWM(0, 0);
+  delay(200);
 }
 
-// ISR encodeurs
-void IRAM_ATTR onTickDroit() { ticks_droit++; }
-void IRAM_ATTR onTickGauche() { ticks_gauche++; }
-
-// Conversion distance -> ticks
 long distanceToTicks(float distance_cm) {
-  float perimetre = PI * DIAMETRE_ROUE_CM;
-  return (distance_cm / perimetre) * TICKS_PAR_TOUR;
+  return (distance_cm / PERIMETRE_ROUE) * TICKS_PAR_TOUR;
 }
 
-// Avancer avec PID (sans facteur de correction exagéré)
-void avancerDistance(float distance_cm) {
-  ticks_droit = 0;
-  ticks_gauche = 0;
-  previous_error = 0;
-  integral = 0;
+void avancerVers(float x_target, float y_target) {
+  float dx = x_target - posX;
+  float dy = y_target - posY;
+  float target_angle = atan2(dy, dx);
+  float distance = sqrt(dx * dx + dy * dy) * facteur_echelle;
 
-  int base_pwm = pwm_normal;
-  long target_ticks = distanceToTicks(distance_cm);
+  float travelled = 0;
+  float step = 0.1;
 
-  while ((ticks_droit + ticks_gauche) / 2 < target_ticks) {
-    long erreur = ticks_gauche - ticks_droit;
+  while (travelled < distance) {
+    float error = 0;
+    integral += error;
+    float derivative = error - previous_error;
+    float correction = Kp * error + Ki * integral + Kd * derivative;
+    previous_error = error;
 
-    integral += erreur;
-    float correction = Kp * erreur + Ki * integral + Kd * (erreur - previous_error);
-    previous_error = erreur;
-
-    int pwm_gauche = base_pwm - correction;
-    int pwm_droit = base_pwm + correction;
-
+    int pwm_gauche = pwm_normal - correction;
+    int pwm_droit = pwm_normal + correction;
     setMotorPWM(pwm_gauche, pwm_droit);
-    delay(10);
-  }
 
-  setMotorPWM(base_pwm / 2, base_pwm / 2);
-  delay(100);
-
-  stopMotors();
-  delay(300);
-}
-
-// Reculer avec PID
-void reculerDistance(float distance_cm) {
-  ticks_droit = 0;
-  ticks_gauche = 0;
-  previous_error = 0;
-  integral = 0;
-
-  int base_pwm = pwm_normal;
-  long target_ticks = distanceToTicks(distance_cm);
-
-  while ((ticks_droit + ticks_gauche) / 2 < target_ticks) {
-    long erreur = ticks_droit - ticks_gauche;
-
-    integral += erreur;
-    float correction = Kp * erreur + Ki * integral + Kd * (erreur - previous_error);
-    previous_error = erreur;
-
-    // PWM négatif pour reculer
-    int pwm_gauche = -(base_pwm + correction);
-    int pwm_droit  = -(base_pwm - correction);
-
-    setMotorPWM(pwm_gauche, pwm_droit);
-    delay(10);
-  }
-
-  setMotorPWM(-base_pwm / 2, -base_pwm / 2);
-  delay(100);
-
-  stopMotors();
-  delay(300);
-}
-
-// Rotation
-void tournerAngle(float angle_deg, int base_pwm, bool gauche) {
-  ticks_droit = 0;
-  ticks_gauche = 0;
-
-  float distance_par_roue = (PI * EMPATTEMENT_CM * angle_deg) / 360.0;
-  long target_ticks = distanceToTicks(distance_par_roue);
-
-  while (max(ticks_droit, ticks_gauche) < target_ticks) {
-    if (gauche) {
-      setMotorPWM(-base_pwm, base_pwm);
-    } else {
-      setMotorPWM(base_pwm, -base_pwm);
-    }
-    delay(10);
+    delay(100);
+    posX += step * cos(target_angle);
+    posY += step * sin(target_angle);
+    travelled += step;
   }
 
   stopMotors();
-  delay(500);
+  angleRobot = target_angle;
 }
 
-void symbole(float angle_deg, int rayon_cm, bool sensHoraire) {
-  // Avance une roue pendant que l’autre reste fixe pour dessiner un arc
-  ticks_droit = 0;
-  ticks_gauche = 0;
 
-  // Calcul de la distance que doit parcourir une roue sur un arc de cercle
-  float distance_arc = 2 * PI * rayon_cm * (angle_deg / 360.0);
-  long ticks_arc = distanceToTicks(distance_arc);
-
-  while (max(ticks_droit, ticks_gauche) < ticks_arc) {
-    if (sensHoraire) {
-      // Roue gauche avance, roue droite fixe
-      setMotorPWM(pwm_lent, 0);
-    } else {
-      // Roue droite avance, roue gauche fixe
-      setMotorPWM(0, pwm_lent);
-    }
-    delay(10);
-  }
-
-  stopMotors();
-  delay(300);
-}
-
-// Sequence escalier
 void sequenceEscalier() {
-  SerialBT.println("Début de la séquence escalier...");
+  SerialBT.println("Démarrage escalier...");
+  posX = 0.0; posY = 0.0; angleRobot = 0.0;
+  ticks_droit = 0; ticks_gauche = 0; // reset encodeurs
 
-  symbole(44.0, 8, true);  // Marque de départ (sens horaire)
-  symbole(22.0,8,false); //Suite marque de départ 
+  // 1. Ligne droite 20 cm
+  avancerVers(20.0, 0.0);
+  SerialBT.println("Fin ligne 1");
 
-  avancerDistance(17.0); // ajusté pour 20 cm réel  
-  tournerAngle(65.0, pwm_normal, true); // correction d'angle pour 90° théorique
-  avancerDistance(5.5); // ajusté pour 10 cm réel   
-  tournerAngle(65.0, pwm_normal, false); // correction d'angle pour 90° théorique
-  avancerDistance(42.5); // ajusté pour 40 cm réel 
+  // 2. Amorce (rotation sur place)
+  setMotorPWM(-100, 100);
+  delay(145);
+  stopMotors();
+  delay(300);
+  SerialBT.println("Fin amorce");
 
-  symbole(22.0, 8, false); // Marque d’arrivée (sens anti-horaire)
-  symbole(44.0 , 8, true); //Suite marque d'arrivée 
+  // 3. Courbe gauche avec PID sur différence ticks (roue droite vs gauche)
+  int base_pwm_gauche = 70;
+  int pwm_droite = 370;
+  int duration_ms = 135; // durée totale du virage
+  int step_delay = 20;
+  int steps = duration_ms / step_delay;
 
-  SerialBT.println("Séquence de l'escalier terminée !");
-}
+  float pid_Kp = 2.0; // PID pour équilibrer les ticks (pas l’angle réel)
+  float pid_Ki = 0.0;
+  float pid_Kd = 0.1;
+  float pid_integral = 0;
+  float pid_prev_error = 0;
 
-//Séquence escargot avec paramètres 
-void sequenceEscargot(float longueur_initiale, int nbTours) {
-  SerialBT.println("Début de la séquence escargot (paramétrée)...");
+  for (int k = 0; k < steps; k++) {
+    long diff_ticks = ticks_droit - ticks_gauche;
+    float error = -diff_ticks; // objectif : égaliser avance des roues
+    pid_integral += error;
+    float derivative = error - pid_prev_error;
+    float correction = pid_Kp * error + pid_Ki * pid_integral + pid_Kd * derivative;
+    pid_prev_error = error;
 
-  float facteurCorrection = 3.0 / 6.5;   
-  float angleCorrige = 85.0;
-
-  float longueur = longueur_initiale * facteurCorrection;
-  float increment = 4.0 * facteurCorrection;
-
-  for (int i = 0; i < nbTours * 2; i++) {
-    avancerDistance(longueur);
-    tournerAngle(angleCorrige, pwm_normal, true);
-    if (i % 2 == 1) {
-      longueur += increment;
-    }
+    int pwm_gauche_corrige = constrain(base_pwm_gauche + correction, 50, 255);
+    setMotorPWM(pwm_gauche_corrige, pwm_droite);
+    delay(step_delay);
   }
-
-  SerialBT.println("Séquence escargot terminée !");
-}
-
-void cercle(float rayonStylo) {
-  float distanceStylo = 12.5; // Distance entre roues et stylo
-  float demiEmpattement = 4.5;
-
-  float rayonCentre = rayonStylo - distanceStylo;
-  if (rayonCentre <= 0) {
-    SerialBT.println("Rayon trop petit pour exécuter un cercle valide.");
-    return;
-  }
-
-  float rayonInterieur = rayonCentre - demiEmpattement;
-  float rayonExterieur = rayonCentre + demiEmpattement;
-
-  float rapportVitesse = rayonInterieur / rayonExterieur;
-
-  int pwm_droit = pwm_normal;
-  int pwm_gauche = (int)(pwm_droit * rapportVitesse);
-  if (pwm_gauche < 1) pwm_gauche = 1;
-
-  float distance_par_tick = (PI * DIAMETRE_ROUE_CM) / TICKS_PAR_TOUR;
-
-  // On veut que le robot tourne de 360°
-  float angle_vise_rad = 2 * PI;
-
-  ticks_droit = 0;
-  ticks_gauche = 0;
-
-  SerialBT.println("Début cercle (par angle)...");
-
-  long ticks_target = distanceToTicks(2 * PI * rayonExterieur);
-
-  while (ticks_droit < ticks_target) {
-    setMotorPWM(pwm_gauche, pwm_droit);
-    delay(10);
-  }
-
 
   stopMotors();
-  SerialBT.println("Cercle terminé !");
+  SerialBT.println("Fin courbe gauche");
+
+  // 4. Courbe droite (inchangée)
+  int j = 70;
+  while (j < 205) {
+    setMotorPWM(205, j);
+    j += 3;
+    delay(20);
+  }
+  SerialBT.println("Fin courbe droite");
+
+  // Correction finale pour compléter les 7 cm manquants
+  float dx = 4.3 * cos(angleRobot);
+  float dy = 4.3 * sin(angleRobot);
+  avancerVers(posX + dx, posY + dy);
+  SerialBT.println("Correction 7 cm ajoutée");
+
+  SerialBT.println("Escalier terminé");
 }
 
 void setup() {
@@ -264,11 +184,6 @@ void setup() {
 
   pinMode(EN_D, OUTPUT);
   pinMode(EN_G, OUTPUT);
-  pinMode(IN_1_D, OUTPUT);
-  pinMode(IN_2_D, OUTPUT);
-  pinMode(IN_1_G, OUTPUT);
-  pinMode(IN_2_G, OUTPUT);
-
   digitalWrite(EN_D, HIGH);
   digitalWrite(EN_G, HIGH);
 
@@ -277,68 +192,30 @@ void setup() {
   attachInterrupt(digitalPinToInterrupt(ENC_D_A), onTickDroit, RISING);
   attachInterrupt(digitalPinToInterrupt(ENC_G_A), onTickGauche, RISING);
 
+  setupPWM();
   stopMotors();
-  Serial.println("Bluetooth actif. En attente de commande...");
 }
 
 void loop() {
   if (SerialBT.available()) {
     char cmd = SerialBT.read();
-    Serial.print("Commande recue : ");
-    Serial.println(cmd);
-
-    switch (cmd)
-    {
-    case 'a':
+    if (cmd == 'a') {
       sequenceEscalier();
-      break;
-    case 'b':
-    {
-      SerialBT.println("Saisir la longueur initiale (cm) :");
-    while (!SerialBT.available());
-    float longueurInitiale = SerialBT.parseFloat();
-    SerialBT.println(longueurInitiale);
-
-    SerialBT.println("Saisir le nombre de tours :");
-    while (!SerialBT.available());
-    int nbTours = SerialBT.parseInt();
-    SerialBT.println(nbTours);
-
-    sequenceEscargot(longueurInitiale, nbTours);
-    break;
     }
-    
-    case 'c': {
-      SerialBT.println("Saisir le rayon du cercle (cm) :");
-      while (!SerialBT.available()); 
-
-      String input = SerialBT.readStringUntil('\n'); 
-      float rayon = input.toFloat();
-
-      if (rayon < 2 || rayon > 20) {
-        SerialBT.println("Le rayon doit être compris entre 2 et 20 cm.");
-      } else {
-        SerialBT.print("Rayon reçu : ");
-        SerialBT.println(rayon);
-        cercle(rayon);
-      }
-      break;
+    if (cmd == 'b') {
+      //sequenceSpirale();
     }
-    case 'd': 
-      //sequenceRosace(); 
-      break;
-    case 'e': 
-      //sequenceFlèche(); 
-      break; 
-    case 'f': 
-      //sequenceRosedesvents(); 
-      break;  
-    case 's':
-      stopMotors();
-      SerialBT.println("Stop");
-      default:
-      break;
+    if (cmd == 'c') {
+      //sequenceCercle();
+    }
+    if (cmd == 'd') {
+      //sequenceRosace();
+    }
+    if (cmd == 'e') {
+      //sequenceFleche();
+    }
+    if (cmd == 'f') {
+      //sequenceRosedesvents();
     }
   }
 }
-
